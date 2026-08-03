@@ -51,7 +51,16 @@ QUIZ_LINE = "Kvíz můžete vyplnit na Kinoboxu"
 
 
 def http_get(url: str, timeout: int = 30) -> bytes:
-    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    headers = {
+        "User-Agent": UA,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "cs-CZ,cs;q=0.9,en;q=0.8",
+        "Referer": "https://www.kinobox.cz/",
+    }
+    key = os.environ.get("KINOBOX_FEED_KEY")
+    if key:
+        headers["X-Feed-Key"] = key
+    req = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read()
 
