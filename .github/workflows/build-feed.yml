@@ -25,6 +25,7 @@ jobs:
       - name: Generate feed
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          KINOBOX_FEED_KEY: ${{ secrets.KINOBOX_FEED_KEY }}
         run: python transform.py
 
       - name: Commit & push if changed
