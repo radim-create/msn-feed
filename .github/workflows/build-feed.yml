@@ -2,7 +2,7 @@ name: Build MSN feed
 
 on:
   schedule:
-    - cron: "*/15 * * * *"   # každých 15 minut (GitHub může přidat pár minut zpoždění)
+    - cron: "4,19,34,49 * * * *"   # každých 15 minut (GitHub může přidat pár minut zpoždění)
   workflow_dispatch: {}       # ruční spuštění z UI
 
 permissions:
