@@ -8,6 +8,8 @@ writes docs/feed.xml (served by GitHub Pages, polled by MSN every ~15 min).
 Rules:
   1. Skip "Recenzujte a vyhrajte" giveaway articles entirely.
   2. Skip articles published before CUTOFF_DATE (default 2026-07-10).
+     The ELIGIBILITY check always uses the ORIGINAL Kinobox date, never the
+     re-stamped one from rule 7.
   3. Strip <iframe> embeds (MSN forbids them). If the article had a Kinobox
      video embed, append a bold, linked closing line
      "Video si můžete přehrát na Kinoboxu." pointing to the article.
@@ -17,9 +19,13 @@ Rules:
      Flagged images are removed from the feed item. Results are cached in
      vetted.json so each image is only checked once. If ANTHROPIC_API_KEY is
      not set, images pass through unvetted (a warning is printed).
-  6. Keep guid/link/pubDate/title/description/content:encoded/media:credit
-     from the source feed — MSN dedups on guid, so nothing is ever
-     published twice.
+  6. Keep guid/link/title/description/content:encoded/media:credit from the
+     source feed — MSN dedups on guid, so nothing is published twice.
+  7. pubDate = the moment the article FIRST appears in this feed, i.e. the
+     current date of the run that picks it up, not the Kinobox date. The
+     stamp is written to pubdates.json (keyed by Kinobox article id) and
+     reused on every later run, so an article's date never shifts once
+     published and previously published articles keep their existing dates.
 
 No third-party dependencies (urllib only), so it runs on a bare GitHub runner.
 """
@@ -37,6 +43,7 @@ from pathlib import Path
 SOURCE_URL = os.environ.get("SOURCE_URL", "https://www.kinobox.cz/api/rss-centrum")
 OUTPUT = Path(os.environ.get("OUTPUT", "docs/feed.xml"))
 VET_CACHE = Path(os.environ.get("VET_CACHE", "vetted.json"))
+PUBDATE_LEDGER = Path(os.environ.get("PUBDATE_LEDGER", "pubdates.json"))
 CUTOFF_DATE = datetime.fromisoformat(
     os.environ.get("CUTOFF_DATE", "2026-07-10")
 ).replace(tzinfo=timezone.utc)
@@ -48,6 +55,10 @@ UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
 
 VIDEO_LINE = "Video si můžete přehrát na Kinoboxu."
 QUIZ_LINE = "Kvíz můžete vyplnit na Kinoboxu"
+
+# id -> RFC 2822 pubDate string; loaded from / saved to PUBDATE_LEDGER
+PUBDATES: dict = {}
+RUN_STAMP = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S GMT")
 
 
 def http_get(url: str, timeout: int = 30) -> bytes:
@@ -75,16 +86,16 @@ def field(item: str, tag: str) -> str:
     return cd.group(1) if cd else val
 
 
-# ---------------------------------------------------------------- image vetting
-
-def load_cache() -> dict:
-    if VET_CACHE.exists():
+def load_json(path: Path) -> dict:
+    if path.exists():
         try:
-            return json.loads(VET_CACHE.read_text())
+            return json.loads(path.read_text())
         except Exception:
             pass
     return {}
 
+
+# ---------------------------------------------------------------- image vetting
 
 def vet_image(url: str, cache: dict) -> str:
     """Return 'clean', 'violent' or 'unknown' (download/API failure)."""
@@ -132,6 +143,12 @@ def vet_image(url: str, cache: dict) -> str:
 
 # ---------------------------------------------------------------- content rules
 
+def article_id(link: str) -> str:
+    """Kinobox article id from .../clanky/{category}/{id}-{slug}."""
+    m = re.search(r"/clanky/[^/]+/(\d+)-", link)
+    return m.group(1) if m else link
+
+
 def is_giveaway(title: str, content: str) -> bool:
     return "recenzujte a vyhrajte" in (title + " " + content[:500]).lower()
 
@@ -170,16 +187,25 @@ def transform_item(item: str, cache: dict, stats: dict) -> str | None:
         stats["skipped_malformed"].append(title or "(bez názvu)")
         return None
     try:
-        pub_dt = parsedate_to_datetime(pub)
+        pub_dt = parsedate_to_datetime(pub)          # ORIGINAL Kinobox date
     except Exception:
         stats["skipped_malformed"].append(title)
         return None
-    if pub_dt < CUTOFF_DATE:
+    if pub_dt < CUTOFF_DATE:                          # eligibility on original
         stats["skipped_old"].append(title)
         return None
     if is_giveaway(title, content):
         stats["skipped_giveaway"].append(title)
         return None
+
+    # pubDate published to MSN: first-seen stamp, stable across runs
+    aid = article_id(link)
+    if aid in PUBDATES:
+        out_pub = PUBDATES[aid]
+    else:
+        out_pub = RUN_STAMP
+        PUBDATES[aid] = out_pub
+        stats["restamped"].append(title)
 
     quiz = is_quiz(title)
     content = clean_content(content, link, quiz)
@@ -215,13 +241,14 @@ def transform_item(item: str, cache: dict, stats: dict) -> str | None:
         f"      <description>{cdata(desc)}</description>\n"
         f"      <content:encoded>{cdata(content)}</content:encoded>\n"
         f"      {media_xml}\n"
-        f"      <pubDate>{pub}</pubDate>\n"
+        f"      <pubDate>{out_pub}</pubDate>\n"
         f"      <link>{link}</link>\n"
         f'      <guid isPermaLink="true">{guid}</guid>\n'
         "    </item>")
 
 
 def main() -> int:
+    global PUBDATES
     if not ANTHROPIC_API_KEY:
         print("WARNING: ANTHROPIC_API_KEY not set — images are NOT vetted "
               "for violence and pass through unchanged.", file=sys.stderr)
@@ -235,10 +262,11 @@ def main() -> int:
         print("ERROR: no <item> elements found in source feed", file=sys.stderr)
         return 1
 
-    cache = load_cache()
+    cache = load_json(VET_CACHE)
+    PUBDATES = load_json(PUBDATE_LEDGER)
     stats = {k: [] for k in ("published", "skipped_old", "skipped_giveaway",
                              "skipped_malformed", "images_removed",
-                             "quiz", "video")}
+                             "quiz", "video", "restamped")}
     out_items = [x for x in (transform_item(i, cache, stats) for i in items) if x]
 
     now = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S GMT")
@@ -261,13 +289,18 @@ def main() -> int:
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     OUTPUT.write_text(feed, encoding="utf-8")
     VET_CACHE.write_text(json.dumps(cache, indent=1, ensure_ascii=False))
+    PUBDATE_LEDGER.write_text(json.dumps(PUBDATES, indent=1, ensure_ascii=False,
+                                         sort_keys=True))
 
     print(f"published={len(stats['published'])} "
+          f"new_with_today_date={len(stats['restamped'])} "
           f"skipped_old={len(stats['skipped_old'])} "
           f"skipped_giveaway={len(stats['skipped_giveaway'])} "
           f"malformed={len(stats['skipped_malformed'])} "
           f"images_removed={len(stats['images_removed'])} "
           f"quiz={len(stats['quiz'])} video={len(stats['video'])}")
+    for t in stats["restamped"]:
+        print(f"  new article stamped {RUN_STAMP}: {t}")
     for t, u, v in stats["images_removed"]:
         print(f"  image removed ({v}): {t}")
     return 0
