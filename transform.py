@@ -13,6 +13,10 @@ Rules:
   3. Strip <iframe> embeds (MSN forbids them). If the article had a Kinobox
      video embed, append a bold, linked closing line
      "Video si můžete přehrát na Kinoboxu." pointing to the article.
+     The embed id is recorded in embeds.json (article id -> video id) BEFORE
+     the iframe is stripped. This does not affect docs/feed.xml in any way;
+     it exists so downstream consumers whose platform DOES allow iframes
+     (centrum-feed) can rebuild the player. MSN output stays iframe-free.
   4. Quiz articles ("Kvíz" in title): insert a linked line
      "Kvíz můžete vyplnit na Kinoboxu" just before the last paragraph.
   5. Vet every image with Claude (Haiku, vision) for visible violence/weapons.
@@ -44,6 +48,7 @@ SOURCE_URL = os.environ.get("SOURCE_URL", "https://www.kinobox.cz/api/rss-centru
 OUTPUT = Path(os.environ.get("OUTPUT", "docs/feed.xml"))
 VET_CACHE = Path(os.environ.get("VET_CACHE", "vetted.json"))
 PUBDATE_LEDGER = Path(os.environ.get("PUBDATE_LEDGER", "pubdates.json"))
+EMBED_LEDGER = Path(os.environ.get("EMBED_LEDGER", "embeds.json"))
 CUTOFF_DATE = datetime.fromisoformat(
     os.environ.get("CUTOFF_DATE", "2026-07-10")
 ).replace(tzinfo=timezone.utc)
@@ -58,6 +63,9 @@ QUIZ_LINE = "Kvíz můžete vyplnit na Kinoboxu"
 
 # id -> RFC 2822 pubDate string; loaded from / saved to PUBDATE_LEDGER
 PUBDATES: dict = {}
+# article id -> Kinobox video embed id; loaded from / saved to EMBED_LEDGER.
+# Write-only side channel: never read back into docs/feed.xml.
+EMBEDS: dict = {}
 RUN_STAMP = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S GMT")
 
 
@@ -208,6 +216,13 @@ def transform_item(item: str, cache: dict, stats: dict) -> str | None:
         stats["restamped"].append(title)
 
     quiz = is_quiz(title)
+
+    # Record the video embed id before clean_content() strips the iframe.
+    # Purely a side channel for downstream consumers; feed output unaffected.
+    em = re.search(r"<iframe[^>]*kinobox\.cz/embed/(\d+)", content, re.I)
+    if em:
+        EMBEDS[aid] = em.group(1)
+
     content = clean_content(content, link, quiz)
 
     # image: vet, drop if violent or unverifiable
@@ -248,7 +263,7 @@ def transform_item(item: str, cache: dict, stats: dict) -> str | None:
 
 
 def main() -> int:
-    global PUBDATES
+    global PUBDATES, EMBEDS
     if not ANTHROPIC_API_KEY:
         print("WARNING: ANTHROPIC_API_KEY not set — images are NOT vetted "
               "for violence and pass through unchanged.", file=sys.stderr)
@@ -264,6 +279,7 @@ def main() -> int:
 
     cache = load_json(VET_CACHE)
     PUBDATES = load_json(PUBDATE_LEDGER)
+    EMBEDS = load_json(EMBED_LEDGER)
     stats = {k: [] for k in ("published", "skipped_old", "skipped_giveaway",
                              "skipped_malformed", "images_removed",
                              "quiz", "video", "restamped")}
@@ -291,6 +307,8 @@ def main() -> int:
     VET_CACHE.write_text(json.dumps(cache, indent=1, ensure_ascii=False))
     PUBDATE_LEDGER.write_text(json.dumps(PUBDATES, indent=1, ensure_ascii=False,
                                          sort_keys=True))
+    EMBED_LEDGER.write_text(json.dumps(EMBEDS, indent=1, ensure_ascii=False,
+                                       sort_keys=True))
 
     print(f"published={len(stats['published'])} "
           f"new_with_today_date={len(stats['restamped'])} "
