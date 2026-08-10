@@ -49,6 +49,7 @@ OUTPUT = Path(os.environ.get("OUTPUT", "docs/feed.xml"))
 VET_CACHE = Path(os.environ.get("VET_CACHE", "vetted.json"))
 PUBDATE_LEDGER = Path(os.environ.get("PUBDATE_LEDGER", "pubdates.json"))
 EMBED_LEDGER = Path(os.environ.get("EMBED_LEDGER", "embeds.json"))
+THUMB_LEDGER = Path(os.environ.get("THUMB_LEDGER", "thumbs.json"))
 CUTOFF_DATE = datetime.fromisoformat(
     os.environ.get("CUTOFF_DATE", "2026-07-10")
 ).replace(tzinfo=timezone.utc)
@@ -66,6 +67,12 @@ PUBDATES: dict = {}
 # article id -> Kinobox video embed id; loaded from / saved to EMBED_LEDGER.
 # Write-only side channel: never read back into docs/feed.xml.
 EMBEDS: dict = {}
+# article id -> ORIGINAL Kinobox thumbnail URL, recorded before rule 5 can
+# remove it. Also write-only. Downstream consumers that do not have MSN's
+# no-violence requirement (centrum-feed) use it so no item ends up with a
+# placeholder; kinobox.cz returns 403 to CI runners, so they cannot re-fetch
+# the article page themselves.
+THUMBS: dict = {}
 RUN_STAMP = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S GMT")
 
 
@@ -231,6 +238,7 @@ def transform_item(item: str, cache: dict, stats: dict) -> str | None:
         r'<media:content url="([^"]+)"[^>]*>(.*?)</media:content>', item, re.S)
     if m:
         img_url, inner = m.group(1), m.group(2)
+        THUMBS[aid] = img_url        # side channel, before vetting can drop it
         verdict = vet_image(img_url, cache)
         if verdict == "clean":
             credit = field(inner, "media:credit") or "Kinobox.cz"
@@ -263,7 +271,7 @@ def transform_item(item: str, cache: dict, stats: dict) -> str | None:
 
 
 def main() -> int:
-    global PUBDATES, EMBEDS
+    global PUBDATES, EMBEDS, THUMBS
     if not ANTHROPIC_API_KEY:
         print("WARNING: ANTHROPIC_API_KEY not set — images are NOT vetted "
               "for violence and pass through unchanged.", file=sys.stderr)
@@ -280,6 +288,7 @@ def main() -> int:
     cache = load_json(VET_CACHE)
     PUBDATES = load_json(PUBDATE_LEDGER)
     EMBEDS = load_json(EMBED_LEDGER)
+    THUMBS = load_json(THUMB_LEDGER)
     stats = {k: [] for k in ("published", "skipped_old", "skipped_giveaway",
                              "skipped_malformed", "images_removed",
                              "quiz", "video", "restamped")}
@@ -308,6 +317,8 @@ def main() -> int:
     PUBDATE_LEDGER.write_text(json.dumps(PUBDATES, indent=1, ensure_ascii=False,
                                          sort_keys=True))
     EMBED_LEDGER.write_text(json.dumps(EMBEDS, indent=1, ensure_ascii=False,
+                                       sort_keys=True))
+    THUMB_LEDGER.write_text(json.dumps(THUMBS, indent=1, ensure_ascii=False,
                                        sort_keys=True))
 
     print(f"published={len(stats['published'])} "
