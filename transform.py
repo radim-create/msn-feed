@@ -174,6 +174,25 @@ def is_giveaway(title: str, content: str) -> bool:
     return "recenzujte a vyhrajte" in (title + " " + content[:500]).lower()
 
 
+# Kvizovy iframe NENI v RSS (overeno 12. 8. 2026), ale JE v serverovem HTML
+# clanku uvnitr ArticleHtml_container. Stahneme ho tedy ze stranky - tohle je
+# jedine misto v pipeline, ktere na kinobox.cz dosahne, protoze posila
+# X-Feed-Key. Deje se to jen u kvizovych clanku a jen jednou za clanek
+# (vysledek zustava v iframes.json).
+QUIZ_EMBED_RE = re.compile(
+    r'<iframe[^>]*\bsrc="(https://[^"]*quiz[^"]*/embed/[0-9a-fA-F-]{36})"', re.I)
+
+
+def quiz_embed_from_page(link: str) -> str:
+    try:
+        page = http_get(link, timeout=30).decode("utf-8", "replace")
+    except Exception as e:
+        print(f"  ! quiz page fetch failed ({e}): {link}", file=sys.stderr)
+        return ""
+    m = QUIZ_EMBED_RE.search(page)
+    return m.group(1) if m else ""
+
+
 def is_quiz(title: str) -> bool:
     return bool(re.search(r"\bkvíz\b", title, re.I))
 
@@ -241,6 +260,12 @@ def transform_item(item: str, cache: dict, stats: dict) -> str | None:
     if srcs:
         IFRAMES[aid] = srcs
 
+    if quiz and not any("quiz" in u.lower() for u in IFRAMES.get(aid, [])):
+        qsrc = quiz_embed_from_page(link)
+        if qsrc:
+            IFRAMES.setdefault(aid, []).append(qsrc)
+            stats["quiz_embed_found"].append(title)
+
     content = clean_content(content, link, quiz)
 
     # image: vet, drop if violent or unverifiable
@@ -303,7 +328,8 @@ def main() -> int:
     IFRAMES = load_json(IFRAME_LEDGER)
     stats = {k: [] for k in ("published", "skipped_old", "skipped_giveaway",
                              "skipped_malformed", "images_removed",
-                             "quiz", "video", "restamped")}
+                             "quiz", "video", "restamped",
+                             "quiz_embed_found")}
     out_items = [x for x in (transform_item(i, cache, stats) for i in items) if x]
 
     now = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S GMT")
@@ -341,7 +367,10 @@ def main() -> int:
           f"skipped_giveaway={len(stats['skipped_giveaway'])} "
           f"malformed={len(stats['skipped_malformed'])} "
           f"images_removed={len(stats['images_removed'])} "
-          f"quiz={len(stats['quiz'])} video={len(stats['video'])}")
+          f"quiz={len(stats['quiz'])} video={len(stats['video'])} "
+          f"quiz_embeds={len(stats['quiz_embed_found'])}")
+    for t in stats["quiz_embed_found"]:
+        print(f"  quiz embed nalezen na strance clanku: {t}")
     for t in stats["restamped"]:
         print(f"  new article stamped {RUN_STAMP}: {t}")
     for t, u, v in stats["images_removed"]:
