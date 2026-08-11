@@ -50,6 +50,7 @@ VET_CACHE = Path(os.environ.get("VET_CACHE", "vetted.json"))
 PUBDATE_LEDGER = Path(os.environ.get("PUBDATE_LEDGER", "pubdates.json"))
 EMBED_LEDGER = Path(os.environ.get("EMBED_LEDGER", "embeds.json"))
 THUMB_LEDGER = Path(os.environ.get("THUMB_LEDGER", "thumbs.json"))
+IFRAME_LEDGER = Path(os.environ.get("IFRAME_LEDGER", "iframes.json"))
 CUTOFF_DATE = datetime.fromisoformat(
     os.environ.get("CUTOFF_DATE", "2026-07-10")
 ).replace(tzinfo=timezone.utc)
@@ -73,6 +74,11 @@ EMBEDS: dict = {}
 # placeholder; kinobox.cz returns 403 to CI runners, so they cannot re-fetch
 # the article page themselves.
 THUMBS: dict = {}
+# article id -> list of src of EVERY iframe stripped by rule 3. Also
+# write-only. Lets downstream consumers that allow iframes rebuild whatever
+# was embedded (Kinobox video player, quiz app, ...) without having to guess
+# the host; kinobox.cz returns 403 to CI runners, so they cannot scrape it.
+IFRAMES: dict = {}
 RUN_STAMP = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S GMT")
 
 
@@ -230,6 +236,11 @@ def transform_item(item: str, cache: dict, stats: dict) -> str | None:
     if em:
         EMBEDS[aid] = em.group(1)
 
+    srcs = re.findall(r'<iframe[^>]*?\bsrc\s*=\s*["\']([^"\']+)["\']',
+                      content, re.I)
+    if srcs:
+        IFRAMES[aid] = srcs
+
     content = clean_content(content, link, quiz)
 
     # image: vet, drop if violent or unverifiable
@@ -271,7 +282,7 @@ def transform_item(item: str, cache: dict, stats: dict) -> str | None:
 
 
 def main() -> int:
-    global PUBDATES, EMBEDS, THUMBS
+    global PUBDATES, EMBEDS, THUMBS, IFRAMES
     if not ANTHROPIC_API_KEY:
         print("WARNING: ANTHROPIC_API_KEY not set — images are NOT vetted "
               "for violence and pass through unchanged.", file=sys.stderr)
@@ -289,6 +300,7 @@ def main() -> int:
     PUBDATES = load_json(PUBDATE_LEDGER)
     EMBEDS = load_json(EMBED_LEDGER)
     THUMBS = load_json(THUMB_LEDGER)
+    IFRAMES = load_json(IFRAME_LEDGER)
     stats = {k: [] for k in ("published", "skipped_old", "skipped_giveaway",
                              "skipped_malformed", "images_removed",
                              "quiz", "video", "restamped")}
@@ -320,6 +332,8 @@ def main() -> int:
                                        sort_keys=True))
     THUMB_LEDGER.write_text(json.dumps(THUMBS, indent=1, ensure_ascii=False,
                                        sort_keys=True))
+    IFRAME_LEDGER.write_text(json.dumps(IFRAMES, indent=1, ensure_ascii=False,
+                                        sort_keys=True))
 
     print(f"published={len(stats['published'])} "
           f"new_with_today_date={len(stats['restamped'])} "
