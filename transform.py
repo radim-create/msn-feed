@@ -43,6 +43,7 @@ import urllib.request
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
+from imgpick import pick_image
 
 SOURCE_URL = os.environ.get("SOURCE_URL", "https://www.kinobox.cz/api/rss-centrum")
 OUTPUT = Path(os.environ.get("OUTPUT", "docs/feed.xml"))
@@ -268,22 +269,8 @@ def transform_item(item: str, cache: dict, stats: dict) -> str | None:
 
     content = clean_content(content, link, quiz)
 
-    # image: vet, drop if violent or unverifiable
-    media_xml = ""
-    m = re.search(
-        r'<media:content url="([^"]+)"[^>]*>(.*?)</media:content>', item, re.S)
-    if m:
-        img_url, inner = m.group(1), m.group(2)
-        THUMBS[aid] = img_url        # side channel, before vetting can drop it
-        verdict = vet_image(img_url, cache)
-        if verdict == "clean":
-            credit = field(inner, "media:credit") or "Kinobox.cz"
-            media_xml = (
-                f'<media:content url="{img_url}" type="image/jpeg" '
-                f'medium="image"><media:credit>{credit}</media:credit>'
-                f"</media:content>")
-        else:
-            stats["images_removed"].append((title, img_url, verdict))
+        # obrazek: nikdy se neodstranuje, vybere se nejmene nasilny kandidat
+    media_xml = pick_image(item, aid, title, cache, stats, THUMBS, vet_image, field)
 
     if quiz:
         stats["quiz"].append(title)
