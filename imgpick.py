@@ -1,27 +1,33 @@
 """Vyber a kontrola obrazku pro MSN feed.
 
-MSN zamita cely clanek, kdyz JAKYKOLIV obrazek v nem obsahuje graficke nasili
-("At least one image depicts graphic violence") — tyka se to nahledove fotky
-i fotek uvnitr textu. Tenhle modul resi oboji:
+MSN zamitne cely clanek, kdyz nahledova fotka nesplni jejich pravidla:
+  * "At least one image depicts graphic violence"  -> nasili na jakemkoliv
+    obrazku, tedy i na fotkach uvnitr textu,
+  * "Thumbnail image is too small ... at least 300 x 300 px" -> maly nahled.
 
-  pick_image()            nahledova fotka: pouzije prvni cistou. Kdyz je
-                          fotka z feedu oznacena jako nasilna, dohleda dalsi
-                          fotky v galerii clanku na Kinoboxu a vezme prvni
-                          cistou z nich. Kdyz cista neni zadna, pouzije se
-                          i tak ta nejmene zavadna — clanek nesmi zustat
-                          bez fotky.
+Modul resi oboji:
+
+  pick_image()            nahledova fotka: hleda kandidata, ktery je zaroven
+                          bez nasili a aspon 300x300 px. Kdyz fotka z feedu
+                          nevyhovuje, dohleda dalsi v galerii clanku na
+                          Kinoboxu (galerie nese rozmery, takze male fotky
+                          jdou vyradit bez stahovani). Kdyz nic idealniho
+                          neni, pouzije se nejmene zavadny kandidat —
+                          clanek nesmi zustat bez fotky.
 
   strip_violent_images()  fotky v tele clanku: nasilne se z HTML odstrani,
-                          ostatni zustavaji. Odebranim fotky z tela clanek
-                          o nahledovku neprijde.
+                          ostatni zustavaji. Rozmer se u nich neresi, MSN
+                          limit 300x300 plati jen pro nahled.
 
-Vysledky kontroly se cachuji ve vetted.json, takze kazdy obrazek se overuje
-jen jednou za celou dobu zivota feedu.
+Verdikty i zmerene rozmery se cachuji ve vetted.json (rozmery pod klicem
+"size:<url>"), takze kazdy obrazek se stahuje a overuje jen jednou.
 """
 
 import json
 import re
+import struct
 
+MIN_SIDE = 300          # minimalni rozmer nahledu pozadovany MSN
 RANK = {"clean": 0, "unknown": 1, "violent": 2}
 
 MEDIA_RE = re.compile(
@@ -35,10 +41,80 @@ def _log(stats, key, value):
     stats.setdefault(key, []).append(value)
 
 
+# ------------------------------------------------------------ rozmery obrazku
+
+def _dimensions(data):
+    """(sirka, vyska) z hlavicky PNG / JPEG / WEBP, jinak None."""
+    try:
+        if data[:8] == b"\x89PNG\r\n\x1a\n":
+            w, h = struct.unpack(">II", data[16:24])
+            return w, h
+
+        if data[:2] == b"\xff\xd8":                      # JPEG
+            i, n = 2, len(data)
+            while i < n - 9:
+                if data[i] != 0xFF:
+                    i += 1
+                    continue
+                marker = data[i + 1]
+                if marker in (0xD8, 0x01) or 0xD0 <= marker <= 0xD7:
+                    i += 2
+                    continue
+                seg_len = struct.unpack(">H", data[i + 2:i + 4])[0]
+                if marker in (0xC4, 0xC8, 0xCC):         # tabulky, ne rozmery
+                    i += 2 + seg_len
+                    continue
+                if 0xC0 <= marker <= 0xCF:               # SOFn
+                    h, w = struct.unpack(">HH", data[i + 5:i + 9])
+                    return w, h
+                i += 2 + seg_len
+
+        if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+            chunk = data[12:16]
+            if chunk == b"VP8X":
+                w = int.from_bytes(data[24:27], "little") + 1
+                h = int.from_bytes(data[27:30], "little") + 1
+                return w, h
+            if chunk == b"VP8 ":
+                w = int.from_bytes(data[26:28], "little") & 0x3FFF
+                h = int.from_bytes(data[28:30], "little") & 0x3FFF
+                return w, h
+            if chunk == b"VP8L":
+                b = int.from_bytes(data[21:25], "little")
+                return (b & 0x3FFF) + 1, ((b >> 14) & 0x3FFF) + 1
+    except Exception:
+        pass
+    return None
+
+
+def image_size(url, cache, http_get):
+    """(sirka, vyska) obrazku, nebo None kdyz se nepodari zjistit."""
+    key = f"size:{url}"
+    if key in cache:
+        val = cache[key]
+        return tuple(val) if val else None
+    if not http_get:
+        return None
+    try:
+        dims = _dimensions(http_get(url))
+    except Exception:
+        dims = None
+    cache[key] = list(dims) if dims else None
+    return dims
+
+
+def too_small(url, cache, http_get):
+    """True jen kdyz rozmer opravdu zname a je pod limitem MSN."""
+    dims = image_size(url, cache, http_get)
+    if not dims:
+        return False        # nezname rozmer -> nediskvalifikujeme
+    return dims[0] < MIN_SIDE or dims[1] < MIN_SIDE
+
+
 # ------------------------------------------------------------ galerie clanku
 
-def gallery_urls(link, http_get):
-    """Adresy fotek z galerie clanku na Kinoboxu (poradi jako na webu)."""
+def gallery_candidates(link, http_get):
+    """[(url, sirka, vyska)] z galerie clanku na Kinoboxu."""
     if not (link and http_get):
         return []
     try:
@@ -48,7 +124,8 @@ def gallery_urls(link, http_get):
             return []
         data = json.loads(m.group(1))
         gallery = data["props"]["pageProps"]["articleOut"].get("gallery") or []
-        return [g["url"] for g in gallery if g.get("url")]
+        return [(g["url"], g.get("width") or 0, g.get("height") or 0)
+                for g in gallery if g.get("url")]
     except Exception:
         return []
 
@@ -57,7 +134,12 @@ def gallery_urls(link, http_get):
 
 def pick_image(item, aid, title, cache, stats, thumbs, vet_image, field,
                link=None, http_get=None):
-    """Vrati <media:content> XML pro polozku ("" kdyz zdroj nema zadnou fotku)."""
+    """Vrati <media:content> XML pro polozku ("" kdyz zdroj nema zadnou fotku).
+
+    Skore kandidata = nasili (0 ciste / 1 neoveritelne / 2 nasilne)
+                      + 1 kdyz je fotka mensi nez 300x300.
+    Vitezi nejnizsi skore; 0 znamena fotku, kterou MSN prijme.
+    """
     cands = MEDIA_RE.findall(item)
     if not cands:
         _log(stats, "images_missing", title)
@@ -66,29 +148,36 @@ def pick_image(item, aid, title, cache, stats, thumbs, vet_image, field,
     scored = []
     for img_url, inner in cands:
         verdict = vet_image(img_url, cache)
-        scored.append((RANK.get(verdict, 1), verdict, img_url, inner))
-        if verdict == "clean":
+        small = too_small(img_url, cache, http_get)
+        score = RANK.get(verdict, 1) + (1 if small else 0)
+        scored.append((score, verdict, small, img_url, inner))
+        if score == 0:
             break
 
     scored.sort(key=lambda s: s[0])
-    best_rank, verdict, img_url, inner = scored[0]
+    score, verdict, small, img_url, inner = scored[0]
 
-    # nahledovka z feedu je zavadna -> zkusit galerii clanku na Kinoboxu
-    if best_rank > 0:
-        known = {u for _, _, u, _ in scored}
-        for alt_url in gallery_urls(link, http_get):
+    # fotka z feedu nevyhovuje -> zkusit galerii clanku na Kinoboxu
+    if score > 0:
+        known = {u for _, _, _, u, _ in scored}
+        for alt_url, gw, gh in gallery_candidates(link, http_get):
             if alt_url in known:
                 continue
-            alt_verdict = vet_image(alt_url, cache)
-            if alt_verdict == "clean":
-                _log(stats, "thumb_from_gallery", (title, alt_url))
-                verdict, img_url = "clean", alt_url
-                inner = ""      # kredit z galerie neznamy -> vychozi Kinobox.cz
-                break
+            if gw and gh and (gw < MIN_SIDE or gh < MIN_SIDE):
+                continue        # rozmer z galerie -> male preskocit bez stahovani
+            if vet_image(alt_url, cache) != "clean":
+                continue
+            if too_small(alt_url, cache, http_get):
+                continue
+            _log(stats, "thumb_from_gallery", (title, alt_url))
+            score, verdict, small, img_url, inner = 0, "clean", False, alt_url, ""
+            break
 
     thumbs[aid] = img_url
     if verdict != "clean":
         stats.setdefault("images_removed", []).append((title, img_url, verdict))
+    if small:
+        _log(stats, "thumbs_too_small", (title, img_url))
 
     credit = (field(inner, "media:credit") if inner else "") or "Kinobox.cz"
     return (
