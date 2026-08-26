@@ -599,5 +599,16 @@
  "https://1263469901.rsc.cdn77.org/images/2025/01/13/upload_9251108532397831122.jpg": "clean",
  "https://1263469901.rsc.cdn77.org/images/2025/09/17/upload_2427038969128901858.jpg": "clean",
  "https://1263469901.rsc.cdn77.org/images/2009/10/26/c7e55abdcb151fe8901a98b0f624520d141620700_450.jpg": "clean",
- "https://1263469901.rsc.cdn77.org/images/2026/08/06/upload_17720136453688794843.png": "clean"
+ "https://1263469901.rsc.cdn77.org/images/2026/08/06/upload_17720136453688794843.png": "clean",
+ "https://1263469901.rsc.cdn77.org/images/2025/04/19/upload_2040521529154281301.jpg": "violent",
+ "size:https://1263469901.rsc.cdn77.org/images/2025/04/19/upload_2040521529154281301.jpg": [
+  1920,
+  1080
+ ],
+ "https://1263469901.rsc.cdn77.org/images/2019/01/24/nicolas-cage-si-zahraje-v-hororu-se-smejdem-z-vesmiru-konecne1112281268_726.jpg": "violent",
+ "https://1263469901.rsc.cdn77.org/images/2023/11/28/upload_12642968884199763199.jpg": "clean",
+ "size:https://1263469901.rsc.cdn77.org/images/2023/11/28/upload_12642968884199763199.jpg": [
+  6000,
+  4000
+ ]
 }
