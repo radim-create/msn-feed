@@ -45,7 +45,7 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 from imgpick import pick_image, strip_violent_images
 
-SOURCE_URL = os.environ.get("SOURCE_URL", "https://www.kinobox.cz/api/rss-centrum")
+SOURCE_URL = os.environ.get("SOURCE_URL", "https://www.kinobox.cz/api/rss-msn")
 OUTPUT = Path(os.environ.get("OUTPUT", "docs/feed.xml"))
 VET_CACHE = Path(os.environ.get("VET_CACHE", "vetted.json"))
 PUBDATE_LEDGER = Path(os.environ.get("PUBDATE_LEDGER", "pubdates.json"))
@@ -267,6 +267,7 @@ def transform_item(item: str, cache: dict, stats: dict) -> str | None:
             IFRAMES.setdefault(aid, []).append(qsrc)
             stats["quiz_embed_found"].append(title)
 
+    content = "<p>" + desc + "</p>" + content
     content = clean_content(content, link, quiz)
 
         # obrazek: nikdy se neodstranuje, vybere se nejmene nasilny kandidat
