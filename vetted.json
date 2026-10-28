@@ -3660,5 +3660,17 @@
  "https://1263469901.rsc.cdn77.org/images/2024/04/17/upload_16483934484785428717.jpg": "clean",
  "https://1263469901.rsc.cdn77.org/images/2024/02/12/upload_17940619674708057443.jpg": "clean",
  "https://1263469901.rsc.cdn77.org/images/2024/10/25/upload_1103939371875033136.jpg": "clean",
- "https://1263469901.rsc.cdn77.org/images/2024/10/25/upload_14214605850117719014.jpg": "clean"
+ "https://1263469901.rsc.cdn77.org/images/2024/10/25/upload_14214605850117719014.jpg": "clean",
+ "https://1263469901.rsc.cdn77.org/images/2026/10/27/upload_8771875443413191778.jpg": "violent",
+ "size:https://1263469901.rsc.cdn77.org/images/2026/10/27/upload_8771875443413191778.jpg": [
+  3840,
+  2160
+ ],
+ "https://1263469901.rsc.cdn77.org/images/2026/10/21/upload_13228122773150058705.jpg": "violent",
+ "https://1263469901.rsc.cdn77.org/images/2026/10/21/upload_11113524993660453558.jpg": "violent",
+ "https://1263469901.rsc.cdn77.org/images/2026/10/21/upload_8809105306440590432.jpg": "clean",
+ "size:https://1263469901.rsc.cdn77.org/images/2026/10/21/upload_8809105306440590432.jpg": [
+  4000,
+  2667
+ ]
 }
